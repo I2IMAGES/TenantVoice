@@ -9,7 +9,10 @@ import {
   Plus, 
   Upload,
   Loader2,
-  ChevronRight
+  ChevronRight,
+  Save,
+  RotateCcw,
+  Check
 } from 'lucide-react';
 import { TenantCase, Issue, EvidenceItem, Communication, CommunicationMethod } from './types';
 import { EMPTY_CASE, SYSTEM_INSTRUCTION } from './constants';
@@ -24,7 +27,9 @@ type Action =
   | { type: 'ADD_ISSUE'; payload: Issue }
   | { type: 'ADD_EVIDENCE'; payload: EvidenceItem }
   | { type: 'ADD_COMMUNICATION'; payload: Communication }
-  | { type: 'SET_REPORT'; payload: { snippet: string, timeline: string, pattern: string } };
+  | { type: 'SET_REPORT'; payload: { snippet: string, timeline: string, pattern: string } }
+  | { type: 'LOAD_CASE'; payload: TenantCase }
+  | { type: 'RESET_CASE' };
 
 const caseReducer = (state: TenantCase, action: Action): TenantCase => {
   switch (action.type) {
@@ -36,6 +41,10 @@ const caseReducer = (state: TenantCase, action: Action): TenantCase => {
       return { ...state, evidence: [...state.evidence, action.payload] };
     case 'ADD_COMMUNICATION':
       return { ...state, communications: [...state.communications, action.payload] };
+    case 'LOAD_CASE':
+      return action.payload;
+    case 'RESET_CASE':
+      return EMPTY_CASE;
     default:
       return state;
   }
@@ -45,6 +54,7 @@ const App: React.FC = () => {
   const [tenantCase, dispatch] = useReducer(caseReducer, EMPTY_CASE);
   const [activeTab, setActiveTab] = useState<'meta' | 'issues' | 'comms' | 'report'>('meta');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved'>('idle');
   
   // Input States
   const [newIssueText, setNewIssueText] = useState('');
@@ -56,6 +66,34 @@ const App: React.FC = () => {
   const [commMethod, setCommMethod] = useState<CommunicationMethod>('text');
   const [commMessage, setCommMessage] = useState('');
   const [commResponse, setCommResponse] = useState('');
+
+  // Load from local storage on mount
+  useEffect(() => {
+    const savedData = localStorage.getItem('tenant_voice_case_data');
+    if (savedData) {
+      try {
+        const parsedData = JSON.parse(savedData);
+        dispatch({ type: 'LOAD_CASE', payload: parsedData });
+      } catch (e) {
+        console.error("Failed to load saved case", e);
+      }
+    }
+  }, []);
+
+  const handleSaveCase = () => {
+    localStorage.setItem('tenant_voice_case_data', JSON.stringify(tenantCase));
+    setSaveStatus('saved');
+    setTimeout(() => setSaveStatus('idle'), 2000);
+  };
+
+  const handleResetCase = () => {
+    if (window.confirm("Are you sure? This will delete all current data and start a new case.")) {
+      localStorage.removeItem('tenant_voice_case_data');
+      dispatch({ type: 'RESET_CASE' });
+      setActiveTab('meta');
+      setReportData(null);
+    }
+  };
 
   // Handlers
   const handleUpdateMeta = (field: string, value: any) => {
@@ -176,10 +214,30 @@ const App: React.FC = () => {
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
             <div className="flex items-center gap-2 text-indigo-700">
                 <ShieldCheck className="h-6 w-6" />
-                <h1 className="font-bold text-xl tracking-tight">TenantVoice</h1>
+                <h1 className="font-bold text-xl tracking-tight hidden sm:block">TenantVoice</h1>
+                <span className="sm:hidden font-bold text-lg">TenantVoice</span>
             </div>
-            <div className="text-xs text-slate-400 hidden sm:block">
-                Habitability Case Builder
+            
+            <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleSaveCase}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors border
+                    ${saveStatus === 'saved' 
+                      ? 'bg-green-50 text-green-700 border-green-200' 
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                    }`}
+                >
+                  {saveStatus === 'saved' ? <Check size={16} /> : <Save size={16} />}
+                  {saveStatus === 'saved' ? 'Saved' : 'Save Case'}
+                </button>
+                <button 
+                  onClick={handleResetCase}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                  title="Start New Case"
+                >
+                  <RotateCcw size={16} />
+                  <span className="hidden sm:inline">New Case</span>
+                </button>
             </div>
         </div>
       </header>
@@ -188,7 +246,7 @@ const App: React.FC = () => {
       <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-8">
         
         {/* Progress Nav */}
-        <div className="flex justify-between mb-8 overflow-x-auto pb-2">
+        <div className="flex justify-between mb-8 overflow-x-auto pb-2 scrollbar-hide">
             {[
                 { id: 'meta', label: 'Property Info', icon: Home },
                 { id: 'issues', label: 'Issues & Evidence', icon: AlertOctagon },
@@ -201,7 +259,7 @@ const App: React.FC = () => {
                     <button 
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id as any)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap mr-2 sm:mr-0
                             ${isActive ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}
                         `}
                     >
