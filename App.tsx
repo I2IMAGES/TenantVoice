@@ -1,4 +1,4 @@
-import React, { useState, useReducer, useEffect } from 'react';
+import React, { useState, useReducer, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { 
   ShieldCheck, 
@@ -12,9 +12,11 @@ import {
   ChevronRight,
   Save,
   RotateCcw,
-  Check
+  Check,
+  Tag,
+  CalendarClock
 } from 'lucide-react';
-import { TenantCase, Issue, EvidenceItem, Communication, CommunicationMethod } from './types';
+import { TenantCase, Issue, EvidenceItem, Communication, CommunicationMethod, LandlordPromise } from './types';
 import { EMPTY_CASE, SYSTEM_INSTRUCTION } from './constants';
 import { geminiService } from './services/geminiService';
 import IssueCard from './components/IssueCard';
@@ -61,11 +63,21 @@ const App: React.FC = () => {
   const [newIssueImage, setNewIssueImage] = useState<File | null>(null);
   const [reportData, setReportData] = useState<{ snippet: string, timeline: string, pattern: string } | null>(null);
 
+  // Evidence Upload State
+  const evidenceInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingIssueId, setUploadingIssueId] = useState<string | null>(null);
+
   // Communication Form State
   const [commDate, setCommDate] = useState(new Date().toISOString().split('T')[0]);
   const [commMethod, setCommMethod] = useState<CommunicationMethod>('text');
   const [commMessage, setCommMessage] = useState('');
   const [commResponse, setCommResponse] = useState('');
+  
+  // Communication Extras
+  const [commLinkedIssues, setCommLinkedIssues] = useState<string[]>([]);
+  const [hasPromise, setHasPromise] = useState(false);
+  const [promiseDesc, setPromiseDesc] = useState('');
+  const [promiseDate, setPromiseDate] = useState('');
 
   // Load from local storage on mount
   useEffect(() => {
@@ -97,8 +109,7 @@ const App: React.FC = () => {
 
   // Handlers
   const handleUpdateMeta = (field: string, value: any) => {
-    // Nested update logic specifically for this flat demo structure, 
-    // normally use a more robust form library.
+    // Nested update logic specifically for this flat demo structure
     if (field.includes('.')) {
         const [parent, child] = field.split('.');
         dispatch({
@@ -165,20 +176,87 @@ const App: React.FC = () => {
     }
   };
 
+  // --- Add Evidence Logic ---
+  const handleRequestAddEvidence = (issueId: string) => {
+    setUploadingIssueId(issueId);
+    if (evidenceInputRef.current) {
+        evidenceInputRef.current.click();
+    }
+  };
+
+  const handleEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadingIssueId) {
+        setUploadingIssueId(null);
+        return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+        const base64 = await fileToBase64(file);
+        // We reuse the service to get a caption. We pass a prompt as description.
+        const response = await geminiService.analyzeIssueWithEvidence("Analyze this image and provide a factual caption.", base64, file.type);
+        const caption = response.evidence_items?.[0]?.ai_caption || "Uploaded evidence";
+
+        dispatch({
+            type: 'ADD_EVIDENCE',
+            payload: {
+                id: uuidv4(),
+                issue_id: uploadingIssueId,
+                file_reference: base64,
+                captured_at: new Date().toISOString(),
+                uploaded_at: new Date().toISOString(),
+                ai_caption: caption,
+                user_caption: ''
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        alert("Failed to upload evidence.");
+    } finally {
+        setIsAnalyzing(false);
+        setUploadingIssueId(null);
+        if (evidenceInputRef.current) evidenceInputRef.current.value = '';
+    }
+  };
+
+  // --- Communication Logic ---
+  const handleToggleIssueLink = (issueId: string) => {
+    setCommLinkedIssues(prev => 
+        prev.includes(issueId) ? prev.filter(id => id !== issueId) : [...prev, issueId]
+    );
+  };
+
   const handleLogCommunication = () => {
     if (!commMessage) return;
+
+    const promises: LandlordPromise[] = hasPromise && promiseDesc ? [{
+        id: uuidv4(),
+        description: promiseDesc,
+        promised_completion_date: promiseDate,
+        promised_by: 'Landlord', // defaulting for now
+        status: 'unknown'
+    }] : [];
+
     const newComm: Communication = {
         id: uuidv4(),
         date: commDate,
         method: commMethod,
         tenant_message: commMessage,
         landlord_response: commResponse,
-        linked_issue_ids: [],
-        promises: []
+        linked_issue_ids: commLinkedIssues,
+        promises: promises
     };
+
     dispatch({ type: 'ADD_COMMUNICATION', payload: newComm });
+    
+    // Reset form
     setCommMessage('');
     setCommResponse('');
+    setCommLinkedIssues([]);
+    setHasPromise(false);
+    setPromiseDesc('');
+    setPromiseDate('');
   };
 
   const handleGenerateReport = async () => {
@@ -209,6 +287,17 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col font-sans text-slate-900 bg-slate-50">
       
+      {/* Hidden File Input for Adding Evidence */}
+      <input 
+        type="file" 
+        ref={evidenceInputRef}
+        className="hidden" 
+        accept="image/*"
+        onChange={handleEvidenceUpload}
+        // If user cancels, we need to reset uploadingIssueId, but onChange doesn't fire on cancel.
+        // We handle logic in onChange to unset it.
+      />
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -392,7 +481,7 @@ const App: React.FC = () => {
                                 disabled={isAnalyzing || (!newIssueText && !newIssueImage)}
                                 className="bg-indigo-500 hover:bg-indigo-400 disabled:bg-slate-700 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all"
                              >
-                                {isAnalyzing ? <Loader2 className="animate-spin" size={18} /> : "Analyze & Add"}
+                                {isAnalyzing && !uploadingIssueId ? <Loader2 className="animate-spin" size={18} /> : "Analyze & Add"}
                              </button>
                         </div>
                     </div>
@@ -413,7 +502,8 @@ const App: React.FC = () => {
                                     key={issue.id} 
                                     issue={issue} 
                                     evidence={tenantCase.evidence.filter(e => e.issue_id === issue.id)}
-                                    onAddEvidence={(id) => alert("To add more evidence, create a new entry describing the additional photo for now.")}
+                                    onAddEvidence={handleRequestAddEvidence}
+                                    isUploading={isAnalyzing && uploadingIssueId === issue.id}
                                 />
                             ))
                         )}
@@ -493,10 +583,75 @@ const App: React.FC = () => {
                         onChange={(e) => setCommResponse(e.target.value)}
                      ></textarea>
 
+                     {/* Issue Linking */}
+                     <div className="mb-4">
+                        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                            <Tag size={12} /> Relates to Issues
+                        </label>
+                        {tenantCase.issues.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                                {tenantCase.issues.map(issue => {
+                                    const isSelected = commLinkedIssues.includes(issue.id);
+                                    return (
+                                        <button
+                                            key={issue.id}
+                                            onClick={() => handleToggleIssueLink(issue.id)}
+                                            className={`text-xs px-2 py-1 rounded-full border transition-colors ${
+                                                isSelected 
+                                                ? 'bg-indigo-100 border-indigo-300 text-indigo-800 font-medium' 
+                                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            {issue.title}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        ) : (
+                            <p className="text-xs text-slate-400 italic">No issues logged yet.</p>
+                        )}
+                     </div>
+
+                     {/* Promises */}
+                     <div className="mb-6 p-4 bg-slate-50 rounded border border-slate-200">
+                        <label className="flex items-center gap-2 cursor-pointer mb-2">
+                            <input 
+                                type="checkbox" 
+                                className="rounded text-indigo-600 focus:ring-indigo-500"
+                                checked={hasPromise}
+                                onChange={(e) => setHasPromise(e.target.checked)}
+                            />
+                            <span className="text-sm font-medium text-slate-700 flex items-center gap-1">
+                                <CalendarClock size={16} className="text-slate-500" /> Landlord made a specific promise
+                            </span>
+                        </label>
+                        
+                        {hasPromise && (
+                            <div className="ml-6 space-y-3 animate-in slide-in-from-top-2">
+                                <input 
+                                    type="text" 
+                                    placeholder="What was promised? (e.g. 'Fix leak by Friday')"
+                                    className="w-full p-2 border border-slate-300 rounded bg-white text-slate-900 text-sm"
+                                    value={promiseDesc}
+                                    onChange={(e) => setPromiseDesc(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-slate-500">By date:</span>
+                                    <input 
+                                        type="date" 
+                                        className="p-1.5 border border-slate-300 rounded bg-white text-slate-900 text-sm"
+                                        value={promiseDate}
+                                        onChange={(e) => setPromiseDate(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+                        )}
+                     </div>
+
                      <button 
                         onClick={handleLogCommunication}
                         disabled={!commMessage}
-                        className="bg-slate-800 text-white px-4 py-2 rounded font-medium text-sm hover:bg-slate-700 disabled:bg-slate-400"
+                        className="bg-slate-800 text-white px-4 py-2 rounded font-medium text-sm hover:bg-slate-700 disabled:bg-slate-400 w-full sm:w-auto"
                      >
                         Log Interaction
                      </button>
@@ -516,10 +671,24 @@ const App: React.FC = () => {
                             {tenantCase.communications.map(comm => (
                                 <div key={comm.id} className="p-6">
                                     <div className="flex justify-between mb-2">
-                                        <span className="font-bold text-slate-800">{comm.date}</span>
-                                        <span className="text-xs uppercase bg-slate-100 px-2 py-1 rounded text-slate-500">{comm.method}</span>
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold text-slate-800">{comm.date}</span>
+                                            <span className="text-xs uppercase bg-slate-100 px-2 py-1 rounded text-slate-500">{comm.method}</span>
+                                        </div>
+                                        {comm.linked_issue_ids.length > 0 && (
+                                            <div className="flex gap-1">
+                                                {comm.linked_issue_ids.map(id => {
+                                                    const issue = tenantCase.issues.find(i => i.id === id);
+                                                    return issue ? (
+                                                        <span key={id} className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 max-w-[100px] truncate">
+                                                            {issue.title}
+                                                        </span>
+                                                    ) : null;
+                                                })}
+                                            </div>
+                                        )}
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div className="grid grid-cols-2 gap-4 text-sm mb-3">
                                         <div>
                                             <span className="text-indigo-600 font-medium block text-xs uppercase mb-1">You</span>
                                             <p className="text-slate-700 bg-indigo-50 p-2 rounded rounded-tl-none">{comm.tenant_message}</p>
@@ -531,6 +700,15 @@ const App: React.FC = () => {
                                             </p>
                                         </div>
                                     </div>
+                                    {comm.promises.length > 0 && (
+                                        <div className="bg-yellow-50 border border-yellow-100 rounded p-2 flex items-start gap-2 text-xs text-yellow-800">
+                                            <CalendarClock size={14} className="mt-0.5" />
+                                            <div>
+                                                <span className="font-semibold">Promise made:</span> {comm.promises[0].description} 
+                                                {comm.promises[0].promised_completion_date && ` (Due: ${comm.promises[0].promised_completion_date})`}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -552,7 +730,7 @@ const App: React.FC = () => {
                         disabled={isAnalyzing}
                         className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium shadow-sm hover:bg-indigo-700 flex items-center gap-2"
                     >
-                        {isAnalyzing ? <Loader2 className="animate-spin" /> : <FileText size={18} />}
+                        {isAnalyzing && !uploadingIssueId ? <Loader2 className="animate-spin" /> : <FileText size={18} />}
                         {reportData ? 'Regenerate Report' : 'Generate Report'}
                     </button>
                 </div>

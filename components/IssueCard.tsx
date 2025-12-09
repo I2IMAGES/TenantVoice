@@ -1,14 +1,15 @@
 import React from 'react';
 import { Issue, EvidenceItem } from '../types';
-import { AlertTriangle, CheckCircle, Clock, Camera } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, Camera, Loader2 } from 'lucide-react';
 
 interface IssueCardProps {
   issue: Issue;
   evidence: EvidenceItem[];
   onAddEvidence: (issueId: string) => void;
+  isUploading?: boolean;
 }
 
-const IssueCard: React.FC<IssueCardProps> = ({ issue, evidence, onAddEvidence }) => {
+const IssueCard: React.FC<IssueCardProps> = ({ issue, evidence, onAddEvidence, isUploading = false }) => {
   const severityColor = {
     low: 'bg-blue-100 text-blue-800 border-blue-200',
     medium: 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -58,24 +59,47 @@ const IssueCard: React.FC<IssueCardProps> = ({ issue, evidence, onAddEvidence })
             <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Evidence ({evidence.length})</h4>
             <button 
                 onClick={() => onAddEvidence(issue.id)}
-                className="text-indigo-600 hover:text-indigo-800 text-sm flex items-center gap-1 font-medium"
+                disabled={isUploading}
+                className={`text-sm flex items-center gap-1 font-medium transition-colors ${
+                    isUploading ? 'text-indigo-400 cursor-not-allowed' : 'text-indigo-600 hover:text-indigo-800'
+                }`}
             >
-                <Camera size={14} /> Add Photo
+                {isUploading ? (
+                    <>
+                        <Loader2 size={14} className="animate-spin" /> 
+                        <span className="animate-pulse">Analyzing...</span>
+                    </>
+                ) : (
+                    <>
+                        <Camera size={14} /> Add Photo
+                    </>
+                )}
             </button>
         </div>
-        {evidence.length > 0 ? (
+        
+        {evidence.length === 0 && !isUploading ? (
+            <div className="text-sm text-slate-400 italic bg-slate-50 p-3 rounded text-center">No evidence uploaded yet.</div>
+        ) : (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {evidence.map(item => (
-                <div key={item.id} className="relative group rounded-lg overflow-hidden border border-slate-200">
+                <div key={item.id} className="relative group rounded-lg overflow-hidden border border-slate-200 bg-slate-50">
                     <img src={item.file_reference} alt="evidence" className="w-full h-24 object-cover" />
                     <div className="p-2 bg-slate-50 text-xs text-slate-600 border-t border-slate-200">
-                        <p className="line-clamp-2">{item.ai_caption || item.user_caption}</p>
+                        <p className="line-clamp-2" title={item.ai_caption || item.user_caption}>
+                            {item.ai_caption || item.user_caption}
+                        </p>
                     </div>
                 </div>
             ))}
+            
+            {/* Visual Progress Indicator for Upload */}
+            {isUploading && (
+                <div className="relative rounded-lg overflow-hidden border border-indigo-200 bg-indigo-50 h-auto min-h-[6rem] flex flex-col items-center justify-center animate-pulse">
+                     <Loader2 size={24} className="text-indigo-400 animate-spin mb-2" />
+                     <span className="text-xs text-indigo-500 font-medium">Processing Image...</span>
+                </div>
+            )}
             </div>
-        ) : (
-            <div className="text-sm text-slate-400 italic bg-slate-50 p-3 rounded text-center">No evidence uploaded yet.</div>
         )}
       </div>
     </div>
